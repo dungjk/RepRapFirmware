@@ -883,7 +883,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source)
 		else
 #endif
 		{
-			move->LiveCoordinates(liveCoordinates, GetCurrentXAxes(), GetCurrentYAxes());
+			move->LiveCoordinates(liveCoordinates, currentTool);
 		}
 
 		// Machine coordinates
@@ -1703,7 +1703,7 @@ OutputBuffer *RepRap::GetLegacyStatusResponse(uint8_t type, int seq)
 
 	// Now the machine coordinates
 	float liveCoordinates[MaxTotalDrivers];
-	move->LiveCoordinates(liveCoordinates, GetCurrentXAxes(), GetCurrentYAxes());
+	move->LiveCoordinates(liveCoordinates, currentTool);
 	response->catf("],\"machine\":");		// announce the machine position
 	ch = '[';
 	for (size_t drive = 0; drive < numVisibleAxes; drive++)
@@ -2030,8 +2030,11 @@ bool RepRap::GetFileInfoResponse(const char *filename, OutputBuffer *&response, 
 	{
 		// Poll file info for a specific file
 		String<MaxFilenameLength> filePath;
-		MassStorage::CombineName(filePath.GetRef(), platform->GetGCodeDir(), filename);
-		if (!platform->GetMassStorage()->GetFileInfo(filePath.c_str(), info, quitEarly))
+		if (!MassStorage::CombineName(filePath.GetRef(), platform->GetGCodeDir(), filename))
+		{
+			info.isValid = false;
+		}
+		else if (!platform->GetMassStorage()->GetFileInfo(filePath.c_str(), info, quitEarly))
 		{
 			// This may take a few runs...
 			return false;
@@ -2059,7 +2062,7 @@ bool RepRap::GetFileInfoResponse(const char *filename, OutputBuffer *&response, 
 		}
 
 		response->catf("\"height\":%.2f,\"firstLayerHeight\":%.2f,\"layerHeight\":%.2f,",
-			(double)info.objectHeight, (double)info.firstLayerHeight, (double)info.layerHeight);
+					HideNan(info.objectHeight), HideNan(info.firstLayerHeight), HideNan(info.layerHeight));
 		if (info.printTime != 0)
 		{
 			response->catf("\"printTime\":%" PRIu32 ",", info.printTime);
@@ -2079,7 +2082,7 @@ bool RepRap::GetFileInfoResponse(const char *filename, OutputBuffer *&response, 
 		{
 			for (size_t i = 0; i < info.numFilaments; ++i)
 			{
-				response->catf("%c%.1f", ch, (double)info.filamentNeeded[i]);
+				response->catf("%c%.1f", ch, HideNan(info.filamentNeeded[i]));
 				ch = ',';
 			}
 		}
@@ -2298,14 +2301,27 @@ bool RepRap::WriteToolSettings(FileStore *f) const
 	{
 		if (t != currentTool)
 		{
-			ok = t->WriteSettings(f, false);
+			ok = t->WriteSettings(f);
 		}
 	}
 
-	// Finally write the setting of the active tool and the commands to select it
-	if (ok && currentTool != nullptr)
+	// Finally write the settings of the active tool and the commands to select it. If no current tool, just deselect all tools.
+	if (ok)
 	{
-		ok = currentTool->WriteSettings(f, true);
+		if (currentTool == nullptr)
+		{
+			ok = f->Write("T-1 P0\n");
+		}
+		else
+		{
+			ok = currentTool->WriteSettings(f);
+			if (ok)
+			{
+				String<StringLength20> buf;
+				buf.printf("T%u P0\n", currentTool->Number());
+				ok = f->Write(buf.c_str());
+			}
+		}
 	}
 	return ok;
 }
