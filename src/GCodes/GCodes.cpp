@@ -686,6 +686,7 @@ void GCodes::RunStateMachine(GCodeBuffer& gb, const StringRef& reply)
 			if (oldTool != nullptr)
 			{
 				reprap.StandbyTool(oldTool->Number(), simulationMode != 0);
+				UpdateCurrentUserPosition();			// the tool offset may have changed, so get the current position
 			}
 			gb.AdvanceState();
 			if (reprap.GetTool(gb.MachineState().newToolNumber) != nullptr && AllAxesAreHomed() && (gb.MachineState().toolChangeParam & TPreBit) != 0)
@@ -1809,6 +1810,7 @@ void GCodes::CheckFilament()
 		filamentErrorString.printf("Extruder %u reports %s", lastFilamentErrorExtruder, FilamentMonitor::GetErrorMessage(lastFilamentError));
 		DoPause(*autoPauseGCode, PauseReason::filament, filamentErrorString.c_str());
 		lastFilamentError = FilamentSensorStatus::ok;
+		filamentErrorString.cat('\n');
 		platform.Message(LogMessage, filamentErrorString.c_str());
 	}
 }
@@ -2151,6 +2153,7 @@ bool GCodes::PauseOnStall(DriversBitmap stalledDrivers)
 	stallErrorString.printf("Stall detected on driver(s)");
 	ListDrivers(stallErrorString.GetRef(), stalledDrivers);
 	DoPause(*autoPauseGCode, PauseReason::stall, stallErrorString.c_str());
+	stallErrorString.cat('\n');
 	platform.Message(LogMessage, stallErrorString.c_str());
 	return true;
 }
@@ -4103,9 +4106,9 @@ void GCodes::SaveFanSpeeds()
 // Note that 'reply' may be empty. If it isn't, then we need to append newline when sending it.
 void GCodes::HandleReply(GCodeBuffer& gb, GCodeResult rslt, const char* reply)
 {
-	// Don't report "ok" responses if a (macro) file is being processed
+	// Don't report empty responses if a file or macro is being processed, or if the GCode was queued
 	// Also check that this response was triggered by a gcode
-	if ((gb.MachineState().doingFileMacro || &gb == fileGCode) && reply[0] == 0)
+	if (reply[0] == 0 && (gb.MachineState().doingFileMacro || &gb == fileGCode || &gb == queuedGCode || &gb == daemonGCode || &gb == autoPauseGCode))
 	{
 		return;
 	}
@@ -4119,6 +4122,7 @@ void GCodes::HandleReply(GCodeBuffer& gb, GCodeResult rslt, const char* reply)
 	{
 	case Compatibility::me:
 	case Compatibility::reprapFirmware:
+		// DWC2 expects a response to each command even is the response is just a newline. So don't suppress empty responses.
 		{
 			const MessageType mt = (rslt == GCodeResult::error) ? (MessageType)(type | ErrorMessageFlag | LogMessage)
 									: (rslt == GCodeResult::warning) ? (MessageType)(type | WarningMessageFlag | LogMessage)
